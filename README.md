@@ -1,6 +1,6 @@
 # Claude Code Usage HUD
 
-A lightweight floating desktop widget that shows your **Claude Code token usage** and **session reset timer** in real time.
+A lightweight floating desktop widget that shows your **Claude Code token usage** and **session reset timer** in real time. Built for the Claude.ai Standard Plan.
 
 ![HUD Preview](preview.png)
 
