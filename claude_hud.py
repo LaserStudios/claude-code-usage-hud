@@ -24,9 +24,16 @@ CLAUDE_DIR   = os.path.expanduser("~/.claude")
 WINDOW_HOURS = 5          # Claude Code rolling usage window
 REFRESH_MS   = 15_000     # refresh every 15 seconds
 
-# Approximate output-token limit per 5h window for your plan.
-# Adjust if you hit limits earlier/later. (Pro ≈ 1M, Max 5x ≈ 5M)
-OUTPUT_LIMIT = 2_000_000
+# Cost-based session limit in USD per 5h window.
+# Pro plan ≈ $18-20 per window (tune to match Claude's official % page).
+# Max 5x ≈ $90-100
+COST_LIMIT_USD = 18.50
+
+# Sonnet pricing per million tokens (used for % estimate)
+PRICE_INPUT          = 3.00
+PRICE_OUTPUT         = 15.00
+PRICE_CACHE_CREATION = 3.75
+PRICE_CACHE_READ     = 0.30
 
 
 # ---------- data ----------
@@ -71,7 +78,15 @@ def get_usage():
             pass
 
     reset_at = (oldest + timedelta(hours=WINDOW_HOURS)) if oldest else None
-    return totals, reset_at, now
+
+    cost = (
+        totals["input"]          * PRICE_INPUT          +
+        totals["output"]         * PRICE_OUTPUT         +
+        totals["cache_creation"] * PRICE_CACHE_CREATION +
+        totals["cache_read"]     * PRICE_CACHE_READ
+    ) / 1_000_000
+
+    return totals, cost, reset_at, now
 
 
 def fmt_tokens(n):
@@ -212,15 +227,15 @@ class HUD(tk.Tk):
     # ---- refresh ----
 
     def _refresh(self):
-        totals, reset_at, now = get_usage()
+        totals, cost, reset_at, now = get_usage()
         total = (totals["input"] + totals["cache_creation"]
                  + totals["cache_read"] + totals["output"])
-        pct = min(totals["output"] / OUTPUT_LIMIT * 100, 100) if OUTPUT_LIMIT else 0
+        pct = min(cost / COST_LIMIT_USD * 100, 100) if COST_LIMIT_USD else 0
 
         self.v_input.set(fmt_tokens(totals["input"]))
         self.v_output.set(fmt_tokens(totals["output"]))
         self.v_total.set(fmt_tokens(total))
-        self.v_pct.set(f"{pct:.1f}%")
+        self.v_pct.set(f"{pct:.1f}%  (${cost:.2f})")
         self.v_reset.set(fmt_countdown(reset_at, now))
         self.v_updated.set(f"updated {now.strftime('%H:%M:%S')} UTC")
 
