@@ -12,11 +12,13 @@ A lightweight floating desktop widget that shows your **Claude Code token usage*
 |---|---|
 | Input | Input tokens used in the last 5 hours |
 | Output | Output tokens used in the last 5 hours |
-| Total 5h | Combined token sum for the current window |
-| Usage % | % of your plan's output-token limit (progress bar) |
-| Reset in | Countdown until the 5-hour usage window resets |
+| Total 5h | All tokens combined in the current 5h window |
+| Usage % | How much of your plan limit is used (with progress bar) |
+| Reset in | Countdown until the oldest message leaves the 5h window |
+| Plan buttons | Switch between Free / Pro / Max 5× / Max 20× — saved automatically |
 
-The progress bar turns **yellow** above 60% and **red** above 85%.
+The progress bar turns **yellow** above 60% and **red** above 85%.  
+When the window resets, all values return to zero.
 
 ---
 
