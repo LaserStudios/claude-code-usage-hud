@@ -27,21 +27,16 @@ CONFIG_FILE  = os.path.join(SCRIPT_DIR, "hud_config.json")
 WINDOW_HOURS = 5
 REFRESH_MS   = 10_000
 
-# Cost limit per 5h window per plan (USD, estimated from token pricing)
-# Based on: Pro session at 90% ≈ $16.69 → limit ≈ $18.54
+# Output-token limit per 5h window per plan.
+# Calibrated from: Pro session at 90% official = 334k output tokens → limit ≈ 370k
+# Max plans scale proportionally (5× and 20× Pro).
 PLANS = {
-    "Free":  ("Free",   5.00),
-    "Pro":   ("Pro",   18.50),
-    "Max5":  ("Max 5×", 92.50),
-    "Max20": ("Max 20×",370.00),
+    "Free":  ("Free",     44_000),
+    "Pro":   ("Pro",     370_000),
+    "Max5":  ("Max 5×", 1_850_000),
+    "Max20": ("Max 20×",7_400_000),
 }
 DEFAULT_PLAN = "Pro"
-
-# Sonnet 4.x pricing per million tokens
-PRICE_INPUT          = 3.00
-PRICE_OUTPUT         = 15.00
-PRICE_CACHE_CREATION = 3.75
-PRICE_CACHE_READ     = 0.30
 
 
 # ---------- config ----------
@@ -105,14 +100,7 @@ def get_usage():
             pass
 
     reset_at = (oldest + timedelta(hours=WINDOW_HOURS)) if oldest else None
-    cost = (
-        totals["input"]          * PRICE_INPUT          +
-        totals["output"]         * PRICE_OUTPUT         +
-        totals["cache_creation"] * PRICE_CACHE_CREATION +
-        totals["cache_read"]     * PRICE_CACHE_READ
-    ) / 1_000_000
-
-    return totals, cost, reset_at, now
+    return totals, reset_at, now
 
 
 def fmt_tokens(n):
@@ -281,11 +269,11 @@ class HUD(tk.Tk):
     # ---- refresh ----
 
     def _refresh(self):
-        totals, cost, reset_at, now = get_usage()
+        totals, reset_at, now = get_usage()
         total       = (totals["input"] + totals["cache_creation"]
                        + totals["cache_read"] + totals["output"])
         limit       = PLANS[self._plan][1]
-        pct         = min(cost / limit * 100, 100) if limit else 0
+        pct         = min(totals["output"] / limit * 100, 100) if limit else 0
 
         self.v_input.set(fmt_tokens(totals["input"]))
         self.v_output.set(fmt_tokens(totals["output"]))
