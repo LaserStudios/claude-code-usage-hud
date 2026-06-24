@@ -31,10 +31,10 @@ REFRESH_MS   = 10_000
 # Calibrated from: Pro session at 90% official = 334k output tokens → limit ≈ 370k
 # Max plans scale proportionally (5× and 20× Pro).
 PLANS = {
-    "Free":  ("Free",     44_000),
-    "Pro":   ("Pro",     370_000),
-    "Max5":  ("Max 5×", 1_850_000),
-    "Max20": ("Max 20×",7_400_000),
+    "Free":  ("Free",     25_000),
+    "Pro":   ("Pro",     247_000),
+    "Max5":  ("Max 5×", 1_235_000),
+    "Max20": ("Max 20×",4_940_000),
 }
 DEFAULT_PLAN = "Pro"
 
@@ -66,6 +66,7 @@ def get_usage():
     window_start = now - timedelta(hours=WINDOW_HOURS)
     totals       = dict(input=0, cache_creation=0, cache_read=0, output=0)
     oldest       = None
+    seen_ids     = set()   # deduplicate by message uuid
 
     pattern = os.path.join(CLAUDE_DIR, "projects", "**", "*.jsonl")
     for path in glob.glob(pattern, recursive=True):
@@ -90,6 +91,12 @@ def get_usage():
                     usage = obj.get("message", {}).get("usage", {})
                     if not usage:
                         continue
+                    # skip duplicates (same message in main + subagent JSONL)
+                    uid = obj.get("uuid") or obj.get("requestId")
+                    if uid:
+                        if uid in seen_ids:
+                            continue
+                        seen_ids.add(uid)
                     totals["input"]          += usage.get("input_tokens", 0)
                     totals["cache_creation"] += usage.get("cache_creation_input_tokens", 0)
                     totals["cache_read"]     += usage.get("cache_read_input_tokens", 0)
@@ -170,15 +177,17 @@ class HUD(tk.Tk):
 
         self._build_ui()
 
-        self.bind("<ButtonPress-1>", self._drag_start)
-        self.bind("<B1-Motion>",     self._drag_move)
-        self.bind("<ButtonPress-3>", lambda e: self.destroy())
+        self.bind("<ButtonPress-1>",  self._drag_start)
+        self.bind("<B1-Motion>",      self._drag_move)
+        self.bind("<ButtonPress-3>",  lambda e: self.destroy())
+        self.bind("<Double-Button-1>", lambda e: self._force_refresh())
 
         self.update_idletasks()
         sw = self.winfo_screenwidth()
         self.geometry(f"+{sw - 240}+20")
 
-        self._refresh()
+        # Refresh immediately after the event loop starts
+        self.after(0, self._refresh)
 
     # ---- layout ----
 
@@ -268,22 +277,34 @@ class HUD(tk.Tk):
 
     # ---- refresh ----
 
-    def _refresh(self):
-        totals, reset_at, now = get_usage()
-        total       = (totals["input"] + totals["cache_creation"]
-                       + totals["cache_read"] + totals["output"])
-        limit       = PLANS[self._plan][1]
-        pct         = min(totals["output"] / limit * 100, 100) if limit else 0
+    def _force_refresh(self):
+        """Cancel pending timer and refresh immediately (double-click)."""
+        if hasattr(self, "_timer"):
+            self.after_cancel(self._timer)
+        self._refresh()
 
-        self.v_input.set(fmt_tokens(totals["input"]))
-        self.v_output.set(fmt_tokens(totals["output"]))
-        self.v_total.set(fmt_tokens(total))
-        self.v_pct.set(f"{pct:.1f}%")
+    def _refresh(self):
+        try:
+            totals, reset_at, now = get_usage()
+        except Exception:
+            totals   = dict(input=0, cache_creation=0, cache_read=0, output=0)
+            reset_at = None
+            now      = datetime.now(timezone.utc)
+
+        total = (totals["input"] + totals["cache_creation"]
+                 + totals["cache_read"] + totals["output"])
+        limit = PLANS[self._plan][1]
+        pct   = min(totals["output"] / limit * 100, 100) if limit else 0
+
+        self.v_input.set(fmt_tokens(totals["input"]) if totals["input"] else "—")
+        self.v_output.set(fmt_tokens(totals["output"]) if totals["output"] else "—")
+        self.v_total.set(fmt_tokens(total) if total else "—")
+        self.v_pct.set(f"{pct:.1f}%" if total else "—")
         self.v_reset.set(fmt_countdown(reset_at, now))
         self.v_updated.set(f"updated {now.strftime('%H:%M:%S')} UTC")
 
         self._draw_bar(pct)
-        self.after(REFRESH_MS, self._refresh)
+        self._timer = self.after(REFRESH_MS, self._refresh)
 
     def _draw_bar(self, pct):
         c = self._bar_canvas
