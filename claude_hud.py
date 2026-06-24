@@ -1,10 +1,11 @@
 """
 Claude Code Usage HUD
 Floating always-on-top window showing token usage, % of session limit, and reset time.
-Right-click to close. Drag to move. Click plan buttons to switch plans.
+Right-click for menu (calibrate, refresh, close). Drag to move. Click plan to switch.
 """
 
 import tkinter as tk
+import tkinter.simpledialog as simpledialog
 import json
 import os
 import glob
@@ -27,12 +28,11 @@ CONFIG_FILE  = os.path.join(SCRIPT_DIR, "hud_config.json")
 WINDOW_HOURS = 5
 REFRESH_MS   = 10_000
 
-# Output-token limit per 5h window per plan.
-# Calibrated from: Pro session at 90% official = 334k output tokens → limit ≈ 370k
-# Max plans scale proportionally (5× and 20× Pro).
+# Default output-token limits per 5h window.
+# These can be overridden per plan via right-click → Calibrate.
 PLANS = {
-    "Free":  ("Free",     25_000),
-    "Pro":   ("Pro",     247_000),
+    "Free":  ("Free",      25_000),
+    "Pro":   ("Pro",      247_000),
     "Max5":  ("Max 5×", 1_235_000),
     "Max20": ("Max 20×",4_940_000),
 }
@@ -41,22 +41,36 @@ DEFAULT_PLAN = "Pro"
 
 # ---------- config ----------
 
-def load_plan():
+def load_config():
     try:
         with open(CONFIG_FILE) as f:
-            data = json.load(f)
-            if data.get("plan") in PLANS:
-                return data["plan"]
+            return json.load(f)
     except Exception:
-        pass
-    return DEFAULT_PLAN
+        return {}
 
-def save_plan(plan):
+def save_config(data):
     try:
         with open(CONFIG_FILE, "w") as f:
-            json.dump({"plan": plan}, f)
+            json.dump(data, f, indent=2)
     except Exception:
         pass
+
+def load_plan(cfg):
+    p = cfg.get("plan", DEFAULT_PLAN)
+    return p if p in PLANS else DEFAULT_PLAN
+
+def load_custom_limit(cfg, plan):
+    return cfg.get("custom_limits", {}).get(plan)
+
+def save_custom_limit(plan, limit):
+    cfg = load_config()
+    cfg.setdefault("custom_limits", {})[plan] = limit
+    save_config(cfg)
+
+def save_plan_to_config(plan):
+    cfg = load_config()
+    cfg["plan"] = plan
+    save_config(cfg)
 
 
 # ---------- data ----------
@@ -136,8 +150,10 @@ GREEN   = "#3fb950"
 YELLOW  = "#d29922"
 RED     = "#f85149"
 FOOTER  = "#484f58"
-BTN_ACT = "#1f6feb"   # active plan button bg
-BTN_OFF = "#21262d"   # inactive plan button bg
+BTN_ACT = "#1f6feb"
+BTN_OFF = "#21262d"
+MENU_BG = "#161b22"
+MENU_FG = "#e6edf3"
 
 F_TITLE = ("Consolas", 10, "bold")
 F_ROW   = ("Consolas", 9)
@@ -165,27 +181,27 @@ class HUD(tk.Tk):
         self.configure(bg=BG)
 
         self._drag_x = self._drag_y = 0
-        self._plan   = load_plan()
+        self._cfg    = load_config()
+        self._plan   = load_plan(self._cfg)
         self._btns   = {}
+        self._last_output = 0   # for calibration
 
         self._build_ui()
 
-        self.bind("<ButtonPress-1>",  self._drag_start)
-        self.bind("<B1-Motion>",      self._drag_move)
-        self.bind("<ButtonPress-3>",  lambda e: self.destroy())
+        self.bind("<ButtonPress-1>",   self._drag_start)
+        self.bind("<B1-Motion>",       self._drag_move)
+        self.bind("<ButtonPress-3>",   self._show_menu)
         self.bind("<Double-Button-1>", lambda e: self._force_refresh())
 
         self.update_idletasks()
         sw = self.winfo_screenwidth()
         self.geometry(f"+{sw - 240}+20")
 
-        # Refresh immediately after the event loop starts
         self.after(0, self._refresh)
 
     # ---- layout ----
 
     def _build_ui(self):
-        # Header
         hdr = tk.Frame(self, bg=HDR_BG, pady=5)
         hdr.pack(fill="x")
         tk.Label(hdr, text="  Claude Code Usage", bg=HDR_BG,
@@ -218,7 +234,6 @@ class HUD(tk.Tk):
         sep()
         row("Total 5h", self.v_total,  ACCENT)
 
-        # Usage % + bar
         pf = tk.Frame(body, bg=BG)
         pf.pack(fill="x", pady=2)
         tk.Label(pf, text="Usage %", bg=BG, fg=DIM,
@@ -236,7 +251,6 @@ class HUD(tk.Tk):
         sep()
         row("Reset in", self.v_reset, YELLOW)
 
-        # Plan selector
         sep()
         plan_row = tk.Frame(body, bg=BG)
         plan_row.pack(fill="x", pady=3)
@@ -249,7 +263,6 @@ class HUD(tk.Tk):
             self._btns[key] = btn
         self._update_btns()
 
-        # Footer
         foot = tk.Frame(self, bg=BG, pady=2)
         foot.pack(fill="x")
         tk.Label(foot, textvariable=self.v_updated, bg=BG,
@@ -265,13 +278,54 @@ class HUD(tk.Tk):
 
     def _set_plan(self, plan):
         self._plan = plan
-        save_plan(plan)
+        save_plan_to_config(plan)
         self._update_btns()
+
+    # ---- right-click menu ----
+
+    def _show_menu(self, event):
+        menu = tk.Menu(self, tearoff=0,
+                       bg=MENU_BG, fg=MENU_FG,
+                       activebackground=BTN_ACT, activeforeground=WHITE,
+                       borderwidth=1, relief="flat")
+        menu.add_command(label="Force Refresh",  command=self._force_refresh)
+        menu.add_command(label="Calibrate %…",   command=self._calibrate)
+        menu.add_separator()
+        menu.add_command(label="Close",          command=self.destroy)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _calibrate(self):
+        """Ask user for the official % and compute the correct output-token limit."""
+        if self._last_output == 0:
+            simpledialog.messagebox.showwarning(
+                "No data", "No output tokens found yet. Use Claude first.",
+                parent=self)
+            return
+
+        official = simpledialog.askinteger(
+            "Calibrate to official %",
+            f"HUD reads {fmt_tokens(self._last_output)} output tokens.\n\n"
+            f"What % does claude.ai → Settings → Usage show right now?",
+            parent=self, minvalue=1, maxvalue=100)
+
+        if not official:
+            return
+
+        new_limit = int(self._last_output / (official / 100))
+        save_custom_limit(self._plan, new_limit)
+        self._cfg = load_config()
+        self._force_refresh()
 
     # ---- refresh ----
 
+    def _get_limit(self):
+        custom = load_custom_limit(self._cfg, self._plan)
+        return custom if custom else PLANS[self._plan][1]
+
     def _force_refresh(self):
-        """Cancel pending timer and refresh immediately (double-click)."""
         if hasattr(self, "_timer"):
             self.after_cancel(self._timer)
         self._refresh()
@@ -284,9 +338,10 @@ class HUD(tk.Tk):
             reset_at = None
             now      = datetime.now(timezone.utc)
 
+        self._last_output = totals["output"]
         total = (totals["input"] + totals["cache_creation"]
                  + totals["cache_read"] + totals["output"])
-        limit = PLANS[self._plan][1]
+        limit = self._get_limit()
         pct   = min(totals["output"] / limit * 100, 100) if limit else 0
 
         self.v_input.set(fmt_tokens(totals["input"]) if totals["input"] else "—")
