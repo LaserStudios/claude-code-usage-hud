@@ -66,7 +66,6 @@ def get_usage():
     window_start = now - timedelta(hours=WINDOW_HOURS)
     totals       = dict(input=0, cache_creation=0, cache_read=0, output=0)
     oldest       = None
-    seen_ids     = set()   # deduplicate by message uuid
 
     pattern = os.path.join(CLAUDE_DIR, "projects", "**", "*.jsonl")
     for path in glob.glob(pattern, recursive=True):
@@ -91,12 +90,6 @@ def get_usage():
                     usage = obj.get("message", {}).get("usage", {})
                     if not usage:
                         continue
-                    # skip duplicates (same message in main + subagent JSONL)
-                    uid = obj.get("uuid") or obj.get("requestId")
-                    if uid:
-                        if uid in seen_ids:
-                            continue
-                        seen_ids.add(uid)
                     totals["input"]          += usage.get("input_tokens", 0)
                     totals["cache_creation"] += usage.get("cache_creation_input_tokens", 0)
                     totals["cache_read"]     += usage.get("cache_read_input_tokens", 0)
